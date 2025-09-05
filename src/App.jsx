@@ -1,10 +1,17 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import ChatWindow from './components/ChatWindow.jsx'
 import Composer from './components/Composer.jsx'
 import Toolbar from './components/Toolbar.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
-import { speak, listVoices, supportsRecognition, startRecognition, stopRecognition } from './lib/speech.js'
+import {
+  speak,
+  listVoices,
+  supportsRecognition,
+  startRecognition,
+  stopRecognition
+} from './lib/speech.js'
 import { chat as callAI } from './lib/aiAdapter.js'
+import CameraStream from './components/CameraStream.jsx'
 
 const initialBotMsg = {
   id: crypto.randomUUID(),
@@ -13,7 +20,7 @@ const initialBotMsg = {
   ts: Date.now()
 }
 
-export default function App(){
+export default function App () {
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('chat.history')
     return saved ? JSON.parse(saved) : [initialBotMsg]
@@ -27,6 +34,10 @@ export default function App(){
   const [autoSpeak, setAutoSpeak] = useState(localStorage.getItem('voice.auto') === 'true')
   const [streamTyping, setStreamTyping] = useState(localStorage.getItem('typing.stream') !== 'false')
   const inputRef = useRef(null)
+
+  // camera state
+  const camRef = useRef(null)
+  const [cameraEnabled, setCameraEnabled] = useState(false)
 
   useEffect(() => {
     const v = listVoices()
@@ -50,110 +61,255 @@ export default function App(){
 
   // Speech recognition handlers
   useEffect(() => {
-    if(!supportsRecognition()) return
-    if(listening){
+    if (!supportsRecognition()) return
+    if (listening) {
       startRecognition({
-        onResult: (finalText) => {
+        onResult: finalText => {
           handleSend(finalText)
         },
-        onError: (err) => {
+        onError: err => {
           console.error('Recognition error', err)
           setListening(false)
         },
-        interimCb: (txt) => {
-          // could show interim text somewhere if desired
+        interimCb: txt => {
+          // optional: show interim text
         }
       })
-    }else{
+    } else {
       stopRecognition()
     }
     return () => stopRecognition()
   }, [listening])
 
-  const handleSend = async (text, attachments=[]) => {
-    if(!text && attachments.length === 0) return
-    const userMsg = { id: crypto.randomUUID(), role: 'user', text, ts: Date.now(), attachments }
-    setMessages(prev => [...prev, userMsg, { id: 'typing', role: 'bot', text: '…', typing: true, ts: Date.now() }])
+  const handleSend = async (text, attachments = []) => {
+    if (!text && attachments.length === 0) return
+    const userMsg = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text,
+      ts: Date.now(),
+      attachments
+    }
+    setMessages(prev => [
+      ...prev,
+      userMsg,
+      { id: 'typing', role: 'bot', text: '…', typing: true, ts: Date.now() }
+    ])
 
-    try{
+    try {
       const responseText = await callAI([...messages, userMsg], attachments)
-      if(streamTyping){
+      if (streamTyping) {
         await streamIn(responseText)
-      }else{
-        setMessages(prev => prev.filter(m => m.id !== 'typing').concat({ id: crypto.randomUUID(), role: 'bot', text: responseText, ts: Date.now() }))
+      } else {
+        setMessages(prev =>
+          prev
+            .filter(m => m.id !== 'typing')
+            .concat({
+              id: crypto.randomUUID(),
+              role: 'bot',
+              text: responseText,
+              ts: Date.now()
+            })
+        )
       }
-      if(autoSpeak && responseText) speak(responseText, { voiceName, rate: speechRate, pitch: speechPitch })
-    }catch(e){
+      if (autoSpeak && responseText) {
+        speak(responseText, {
+          voiceName,
+          rate: speechRate,
+          pitch: speechPitch
+        })
+      }
+    } catch (e) {
       console.error(e)
-      setMessages(prev => prev.filter(m => m.id !== 'typing').concat({ id: crypto.randomUUID(), role: 'bot', text: 'Oops, something went wrong.', ts: Date.now() }))
+      setMessages(prev =>
+        prev
+          .filter(m => m.id !== 'typing')
+          .concat({
+            id: crypto.randomUUID(),
+            role: 'bot',
+            text: 'Oops, something went wrong.',
+            ts: Date.now()
+          })
+      )
     }
   }
 
-  async function streamIn(full){
+  async function streamIn (full) {
     const tokens = full.split(/(\s+)/)
     let acc = ''
-    for(const t of tokens){
+    for (const t of tokens) {
       acc += t
-      await new Promise(r => setTimeout(r, Math.min(40 + Math.random()*60, 120)))
-      setMessages(prev => prev.map(m => m.id === 'typing' ? { ...m, text: acc } : m))
+      await new Promise(r =>
+        setTimeout(r, Math.min(40 + Math.random() * 60, 120))
+      )
+      setMessages(prev =>
+        prev.map(m => (m.id === 'typing' ? { ...m, text: acc } : m))
+      )
     }
-    setMessages(prev => prev.map(m => m.id === 'typing' ? { ...m, id: crypto.randomUUID(), typing: false, text: acc, ts: Date.now() } : m))
+    setMessages(prev =>
+      prev.map(m =>
+        m.id === 'typing'
+          ? {
+              ...m,
+              id: crypto.randomUUID(),
+              typing: false,
+              text: acc,
+              ts: Date.now()
+            }
+          : m
+      )
+    )
   }
 
-  function clearChat(){
+  function clearChat () {
     setMessages([initialBotMsg])
   }
 
-  function toggleListening(){
-    if(!supportsRecognition()){
+  function toggleListening () {
+    if (!supportsRecognition()) {
       alert('Speech recognition is not supported in this browser. Try Chrome on desktop.')
       return
     }
     setListening(v => !v)
   }
 
-  function focusInput(){
+  function focusInput () {
     inputRef.current?.focus()
   }
 
   useEffect(() => {
-    const onKey = (e) => {
-      if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){ e.preventDefault(); focusInput() }
-      if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l'){ e.preventDefault(); clearChat() }
-      if(e.key.toLowerCase() === 'm' && !e.metaKey && !e.ctrlKey){ e.preventDefault(); toggleListening() }
+    const onKey = e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        focusInput()
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        clearChat()
+      }
+      if (e.key.toLowerCase() === 'm' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        toggleListening()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   return (
-    <div className="app-wrap">
+    <div
+      className='app-wrap'
+      style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}
+    >
       <Toolbar
         listening={listening}
         onToggleListening={toggleListening}
         onClear={clearChat}
         onOpenSettings={() => setShowSettings(s => !s)}
       />
-      <div className="content">
-        {messages.length === 0 ? (
-          <div className="empty">Start chatting…</div>
-        ) : (
-          <ChatWindow messages={messages} />
-        )}
+
+      {/* Main area: left camera pane + right chat pane */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        {/* Left: camera sidebar */}
+        <aside
+          style={{
+            width: 520,
+            padding: 16,
+            borderRight: '1px solid #e5e5e5',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            alignItems: 'center',
+            background: '#fafafa',
+            overflowY: 'auto'
+          }}
+        >
+          <h3 style={{ margin: 0 }}>Camera</h3>
+
+          {!cameraEnabled ? (
+            <div
+              style={{
+                width: 480,
+                height: 360,
+                background: '#111',
+                color: '#ccc',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 8
+              }}
+            >
+              Camera is off
+            </div>
+          ) : (
+            <CameraStream
+              ref={camRef}
+              width={480}
+              height={360}
+              facingMode='user'
+              fit='cover'
+              onError={err => {
+                alert('Camera error: ' + err.message)
+                setCameraEnabled(false)
+              }}
+            />
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            {!cameraEnabled ? (
+              <button onClick={() => setCameraEnabled(true)}>Enable Camera</button>
+            ) : (
+              <>
+                <button onClick={() => camRef.current?.switchCamera()}>
+                  Switch
+                </button>
+                <button
+                  onClick={() => {
+                    camRef.current?.stop()
+                    setCameraEnabled(false)
+                  }}
+                >
+                  Disable
+                </button>
+              </>
+            )}
+          </div>
+
+          <small style={{ color: '#666' }}>Works over https or localhost.</small>
+        </aside>
+
+        {/* Right: chat content */}
+        <section
+          className='content'
+          style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+        >
+          {messages.length === 0 ? (
+            <div className='empty' style={{ padding: 24 }}>
+              Start chatting…
+            </div>
+          ) : (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ChatWindow messages={messages} />
+            </div>
+          )}
+          <Composer onSend={handleSend} inputRef={inputRef} />
+        </section>
       </div>
-      <Composer
-        onSend={handleSend}
-        inputRef={inputRef}
-      />
+
       {showSettings && (
         <SettingsPanel
           onClose={() => setShowSettings(false)}
           voices={voices}
-          voiceName={voiceName} onVoiceName={setVoiceName}
-          rate={speechRate} onRate={setSpeechRate}
-          pitch={speechPitch} onPitch={setSpeechPitch}
-          autoSpeak={autoSpeak} onAutoSpeak={setAutoSpeak}
-          streamTyping={streamTyping} onStreamTyping={setStreamTyping}
+          voiceName={voiceName}
+          onVoiceName={setVoiceName}
+          rate={speechRate}
+          onRate={setSpeechRate}
+          pitch={speechPitch}
+          onPitch={setSpeechPitch}
+          autoSpeak={autoSpeak}
+          onAutoSpeak={setAutoSpeak}
+          streamTyping={streamTyping}
+          onStreamTyping={setStreamTyping}
         />
       )}
     </div>
